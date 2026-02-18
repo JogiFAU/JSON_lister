@@ -1,0 +1,177 @@
+import argparse
+import json
+from pathlib import Path
+from typing import Any
+
+
+def split_path(path: str) -> list[str]:
+    parts: list[str] = []
+    for token in path.split('.'):
+        if token.endswith('[]') and token != '[]':
+            parts.append(token[:-2])
+            parts.append('[]')
+        else:
+            parts.append(token)
+    return parts
+
+
+def delete_path(node: Any, tokens: list[str], idx: int = 0) -> None:
+    if idx >= len(tokens):
+        return
+
+    token = tokens[idx]
+
+    if token == '[]':
+        if isinstance(node, list):
+            for item in node:
+                delete_path(item, tokens, idx + 1)
+        return
+
+    if isinstance(node, list):
+        for item in node:
+            delete_path(item, tokens, idx)
+        return
+
+    if not isinstance(node, dict) or token not in node:
+        return
+
+    is_last = idx == len(tokens) - 1
+    if is_last:
+        del node[token]
+        return
+
+    child = node[token]
+
+    if idx + 1 < len(tokens) and tokens[idx + 1] == '[]':
+        if isinstance(child, list):
+            if idx + 1 == len(tokens) - 1:
+                del node[token]
+                return
+            for item in child:
+                delete_path(item, tokens, idx + 2)
+        return
+
+    delete_path(child, tokens, idx + 1)
+
+
+
+
+def _is_zero_based_question(question: dict[str, Any]) -> bool:
+    answers = question.get('answers')
+    correct_answers = question.get('correctAnswers')
+
+    if not isinstance(answers, list) or not isinstance(correct_answers, list) or not correct_answers:
+        return False
+
+    for entry in correct_answers:
+        if not isinstance(entry, dict):
+            return False
+
+        index = entry.get('index')
+        text = entry.get('text')
+        if not isinstance(index, int) or not isinstance(text, str):
+            return False
+
+        if index < 0 or index >= len(answers):
+            return False
+
+        answer = answers[index]
+        if not isinstance(answer, dict):
+            return False
+
+        answer_text = answer.get('text')
+        if not isinstance(answer_text, str) or answer_text != text:
+            return False
+
+    return True
+
+
+def _transform_question(question: dict[str, Any]) -> None:
+    answers = question.get('answers')
+    if isinstance(answers, list):
+        for idx, answer in enumerate(answers, start=1):
+            if isinstance(answer, dict):
+                answer['index'] = idx
+
+    if not _is_zero_based_question(question):
+        return
+
+    correct_indices = question.get('correctIndices')
+    if isinstance(correct_indices, list):
+        question['correctIndices'] = [value + 1 if isinstance(value, int) else value for value in correct_indices]
+
+    correct_answers = question.get('correctAnswers')
+    if isinstance(correct_answers, list):
+        for entry in correct_answers:
+            if isinstance(entry, dict) and isinstance(entry.get('index'), int):
+                entry['index'] += 1
+
+
+def _apply_question_transformations(node: Any) -> None:
+    if isinstance(node, dict):
+        if isinstance(node.get('answers'), list):
+            _transform_question(node)
+        for value in node.values():
+            _apply_question_transformations(value)
+    elif isinstance(node, list):
+        for item in node:
+            _apply_question_transformations(item)
+
+def clean_data(data: Any, blacklist_paths: list[str]) -> Any:
+    for path in blacklist_paths:
+        tokens = split_path(path)
+        delete_path(data, tokens)
+
+    _apply_question_transformations(data)
+    return data
+
+
+def load_json(path: Path) -> Any:
+    with path.open('r', encoding='utf-8') as file:
+        return json.load(file)
+
+
+def save_json(path: Path, payload: Any) -> None:
+    with path.open('w', encoding='utf-8') as file:
+        json.dump(payload, file, ensure_ascii=False, indent=2)
+
+
+def default_output_path(input_path: Path) -> Path:
+    return input_path.with_name(f"{input_path.stem}_clean.json")
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description='Bereinigt eine JSON-Datei anhand einer Blacklist von Feldpfaden.'
+    )
+    parser.add_argument('input_json', type=Path, help='Pfad zur zu bereinigenden JSON-Datei.')
+    parser.add_argument('blacklist_json', type=Path, help='Pfad zur Blacklist JSON-Datei (Liste von Feldpfaden).')
+    parser.add_argument(
+        '-o',
+        '--output',
+        type=Path,
+        default=None,
+        help='Optionaler Ausgabepfad. Standard: [input]_clean.json',
+    )
+    return parser.parse_args()
+
+
+def main() -> None:
+    args = parse_args()
+
+    data = load_json(args.input_json)
+    blacklist = load_json(args.blacklist_json)
+
+    if not isinstance(blacklist, list) or not all(isinstance(entry, str) for entry in blacklist):
+        raise ValueError('Die Blacklist muss ein JSON-Array mit Feldpfaden (Strings) sein.')
+
+    cleaned = clean_data(data, blacklist)
+
+    output_path = args.output or default_output_path(args.input_json)
+    save_json(output_path, cleaned)
+
+    print(f"Bereinigung abgeschlossen. Datei gespeichert unter: {output_path}")
+
+
+if __name__ == '__main__':
+    main()
