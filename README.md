@@ -28,3 +28,19 @@ streamlit run app.py
 ```bat
 start_json_lister.bat
 ```
+
+## JSON anhand Blacklist bereinigen (CLI)
+
+Zusätzlich gibt es ein Skript, das eine JSON-Datei mit der exportierten `blacklist.json` bereinigt.
+
+```bash
+python clean_json.py daten.json blacklist.json
+```
+
+Ergebnis: `daten_clean.json`
+
+Optional kann ein Ausgabepfad gesetzt werden:
+
+```bash
+python clean_json.py daten.json blacklist.json -o mein_output.json
+```
