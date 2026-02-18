@@ -25,6 +25,12 @@ pip install streamlit
 streamlit run app.py
 ```
 
+## Windows-Start (ohne venv)
+
+```bat
+start_json_lister.bat
+```
+
 ## Nutzung
 
 1. JSON-Datei in der Sidebar laden.
