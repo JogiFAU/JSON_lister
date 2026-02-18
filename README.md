@@ -1,14 +1,18 @@
 # JSON Lister (Streamlit)
 
-Ein lokales Tool mit IDE-ähnlicher Ansicht, um JSON-Inhalte zu analysieren und Variablen (Fragen/Felder) in Whitelist oder Blacklist einzuordnen.
+Ein lokales Tool mit IDE-ähnlicher Darstellung: links die Optionenleiste, rechts der komplette JSON-Inhalt. Variablennamen sind klickbar und werden je nach Modus farbig markiert.
 
-## Was ist neu
+## Features
 
-- Fokus auf den **Hauptkörper** des JSON (typische Metadatenfelder wie `metadata`, `meta`, `header` werden ignoriert).
-- Darstellung des JSON als editorähnliche Struktur.
-- **Anklickbare Variablennamen**: Klick fügt den Variablenpfad je nach Modus zur Whitelist (grün) oder Blacklist (rot) hinzu.
-- Option: **Blacklist-Einträge ausblenden**, um das Endresultat des Blacklistings direkt zu sehen.
-- Werte bleiben sichtbar (für Interpretation), sind aber nicht der primäre Interaktionspunkt.
+- Gesamtes JSON wird wie in einem Editor dargestellt.
+- **Klickbare Variablenpfade** im JSON.
+- Drei Modi für Klicks auf Variablen:
+  - **Whitelist** (grün)
+  - **Blacklist** (rot)
+  - **Zuordnung aufheben** (Markierung entfernen)
+- Bereits geflaggte Variablen werden automatisch farbig erkannt und angezeigt.
+- Option: Blacklist-Einträge in der Darstellung ausblenden.
+- Export von Whitelist und Blacklist als JSON.
 
 ## Start
 
@@ -26,9 +30,8 @@ start_json_lister.bat
 
 ## Nutzung
 
-1. JSON-Datei hochladen.
-2. In der Sidebar den zu analysierenden Bereich auswählen (ohne Metadaten).
-3. Klickmodus wählen: Whitelist oder Blacklist.
-4. Im JSON-Editor Variablennamen anklicken.
-5. Optional Blacklist ausblenden aktivieren.
-6. Listen exportieren.
+1. Links JSON-Datei laden.
+2. Klickmodus auswählen.
+3. Rechts auf Variablenpfade klicken.
+4. Optional Blacklist-Ausblendung aktivieren.
+5. Whitelist/Blacklist exportieren.
