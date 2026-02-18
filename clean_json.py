@@ -56,6 +56,36 @@ def delete_path(node: Any, tokens: list[str], idx: int = 0) -> None:
 
 
 
+def _is_zero_based_question(question: dict[str, Any]) -> bool:
+    answers = question.get('answers')
+    correct_answers = question.get('correctAnswers')
+
+    if not isinstance(answers, list) or not isinstance(correct_answers, list) or not correct_answers:
+        return False
+
+    for entry in correct_answers:
+        if not isinstance(entry, dict):
+            return False
+
+        index = entry.get('index')
+        text = entry.get('text')
+        if not isinstance(index, int) or not isinstance(text, str):
+            return False
+
+        if index < 0 or index >= len(answers):
+            return False
+
+        answer = answers[index]
+        if not isinstance(answer, dict):
+            return False
+
+        answer_text = answer.get('text')
+        if not isinstance(answer_text, str) or answer_text != text:
+            return False
+
+    return True
+
+
 def _transform_question(question: dict[str, Any]) -> None:
     answers = question.get('answers')
     if isinstance(answers, list):
@@ -63,19 +93,18 @@ def _transform_question(question: dict[str, Any]) -> None:
             if isinstance(answer, dict):
                 answer['index'] = idx
 
+    if not _is_zero_based_question(question):
+        return
+
     correct_indices = question.get('correctIndices')
     if isinstance(correct_indices, list):
-        numeric_values = [value for value in correct_indices if isinstance(value, int)]
-        if numeric_values and 0 in numeric_values:
-            question['correctIndices'] = [value + 1 if isinstance(value, int) else value for value in correct_indices]
+        question['correctIndices'] = [value + 1 if isinstance(value, int) else value for value in correct_indices]
 
     correct_answers = question.get('correctAnswers')
     if isinstance(correct_answers, list):
-        indices = [entry.get('index') for entry in correct_answers if isinstance(entry, dict)]
-        if any(isinstance(index, int) and index == 0 for index in indices):
-            for entry in correct_answers:
-                if isinstance(entry, dict) and isinstance(entry.get('index'), int):
-                    entry['index'] += 1
+        for entry in correct_answers:
+            if isinstance(entry, dict) and isinstance(entry.get('index'), int):
+                entry['index'] += 1
 
 
 def _apply_question_transformations(node: Any) -> None:

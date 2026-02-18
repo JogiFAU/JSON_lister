@@ -33,7 +33,7 @@ start_json_lister.bat
 
 Zusätzlich gibt es ein Skript, das eine JSON-Datei mit der exportierten `blacklist.json` bereinigt.
 
-Das Skript ergänzt außerdem bei Fragen (`answers`) automatisch einen 1-basierten `index` je Antwort und transformiert vorhandene `correctIndices`/`correctAnswers[].index` von 0-basiert auf 1-basiert.
+Das Skript ergänzt außerdem bei Fragen (`answers`) automatisch einen 1-basierten `index` je Antwort. Eine Transformation von `correctIndices`/`correctAnswers[].index` auf 1-basiert erfolgt nur dann, wenn `correctAnswers[].text` exakt dem Text aus `answers[correctAnswers[].index].text` entspricht (Erkennung 0-basierter Referenzen).
 
 ```bash
 python clean_json.py daten.json blacklist.json
