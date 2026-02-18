@@ -1,26 +1,19 @@
 # JSON Blacklist Builder (Streamlit)
 
-Das Tool hilft dabei, aus einem JSON-Datensatz eine **Blacklist von Feldern** zu erstellen, die später für eine Bereinigung verwendet werden kann.
+Das Tool dient der Auswahl einer **Blacklist für finale Felder** (Leaf-Fields), um später eine Bereinigung durchzuführen.
 
-## Ziel
+## Kernverhalten
 
-- Aus dem Datensatz jedes **einzigartige Field** genau einmal erkennen (inkl. Hierarchie/Pfad).
-- Pro Field **X Beispielwerte** anzeigen, um die Bedeutung besser zu interpretieren.
-- Der Nutzer markiert anschließend die gewünschten Felder für die **Blacklist**.
-- Die Blacklist kann als JSON exportiert werden.
+- Das JSON wird hierarchisch analysiert und als Feldstruktur dargestellt.
+- **Nur finale Felder** (Felder ohne weitere Unterfelder) sind die eigentlichen Blacklist-Ziele.
+- Für finale Felder wird der **erste gefundene Wert** im Datensatz angezeigt (zur Interpretation).
+- Für nicht-finale Felder wird **kein Wert** angezeigt.
 
-## Verhalten der Beispielwerte (X)
+## Markierungslogik
 
-- X ist in den Einstellungen konfigurierbar.
-- Standard: **3**, Minimum: **2**, Maximum: **10**.
-- Die Beispiele werden möglichst gleichmäßig über alle Einträge verteilt.
-  - Bei X=3 wird typischerweise angezeigt: erster, mittlerer (aufgerundet), letzter vorhandener Wert.
-
-## Wichtige Hinweise
-
-- Felder in Arrays werden als schemaartiger Pfad normalisiert, z. B. `Questions[].Text`.
-- Dadurch ist jedes Feld nur einmal auswählbar, auch wenn es in vielen Einträgen vorkommt.
-- In der Tabelle sind die Felder hierarchisch eingerückt dargestellt.
+- Wenn ein **finales Feld** markiert wird, landet genau dieses Feld in der Blacklist.
+- Wenn ein **übergeordnetes Feld** markiert wird, werden automatisch **alle untergeordneten finalen Felder** markiert.
+- Export enthält nur finale Felder in der Blacklist.
 
 ## Start
 

@@ -12,7 +12,8 @@ st.set_page_config(page_title="JSON Field Blacklist Builder", page_icon="🧭", 
 class FieldInfo:
     path: str
     depth: int
-    samples: list[str]
+    is_leaf: bool
+    first_value: str
 
 
 def _init_state() -> None:
@@ -20,7 +21,6 @@ def _init_state() -> None:
         "raw_json": None,
         "filename": "",
         "records": [],
-        "sample_count": 3,
         "blacklist": set(),
         "field_infos": [],
     }
@@ -40,19 +40,13 @@ def _load_json() -> None:
         st.error(f"Datei konnte nicht gelesen werden: {err}")
         return
 
-    if isinstance(raw, list):
-        records = raw
-    else:
-        records = [raw]
-
     st.session_state.raw_json = raw
-    st.session_state.records = records
+    st.session_state.records = raw if isinstance(raw, list) else [raw]
     st.session_state.filename = uploaded.name
 
 
 def _extract_paths(node: Any, base: str = "") -> set[str]:
     paths: set[str] = set()
-
     if isinstance(node, dict):
         for key, value in node.items():
             current = f"{base}.{key}" if base else key
@@ -62,14 +56,11 @@ def _extract_paths(node: Any, base: str = "") -> set[str]:
         list_base = f"{base}[]" if base else "[]"
         for item in node:
             paths.update(_extract_paths(item, list_base))
-
     return paths
 
 
 def _path_depth(path: str) -> int:
-    depth = path.count(".")
-    depth += path.count("[]")
-    return depth
+    return path.count(".") + path.count("[]")
 
 
 def _split_path(path: str) -> list[str]:
@@ -106,65 +97,78 @@ def _values_for_path(node: Any, path: str) -> list[Any]:
     return walk(node, 0)
 
 
-def _compact_json(value: Any, max_len: int = 90) -> str:
+def _compact_json(value: Any, max_len: int = 100) -> str:
     text = json.dumps(value, ensure_ascii=False)
-    if len(text) > max_len:
-        return text[: max_len - 3] + "..."
-    return text
+    return text if len(text) <= max_len else text[: max_len - 3] + "..."
 
 
-def _even_indices(count: int, picks: int) -> list[int]:
-    if count <= 0:
-        return []
-    if picks >= count:
-        return list(range(count))
-    if picks == 1:
-        return [0]
-
-    step = (count - 1) / (picks - 1)
-    raw = [round(i * step) for i in range(picks)]
-
-    # strictly increasing & bounded
-    indices: list[int] = []
-    prev = -1
-    for idx in raw:
-        idx = max(idx, prev + 1)
-        idx = min(idx, count - (picks - len(indices)))
-        indices.append(idx)
-        prev = idx
-
-    indices[0] = 0
-    indices[-1] = count - 1
-    return indices
+def _is_leaf(path: str, all_paths: set[str]) -> bool:
+    prefix_dot = path + "."
+    prefix_arr = path + "[]"
+    for other in all_paths:
+        if other != path and (other.startswith(prefix_dot) or other.startswith(prefix_arr)):
+            return False
+    return True
 
 
-def _build_field_infos(records: list[Any], sample_count: int) -> list[FieldInfo]:
-    unique_paths: set[str] = set()
+def _build_field_infos(records: list[Any]) -> list[FieldInfo]:
+    all_paths: set[str] = set()
     for record in records:
-        unique_paths.update(_extract_paths(record))
+        all_paths.update(_extract_paths(record))
 
     infos: list[FieldInfo] = []
-    for path in sorted(unique_paths):
-        seen: list[tuple[int, Any]] = []
-        for ridx, record in enumerate(records):
-            values = _values_for_path(record, path)
-            if values:
-                # per record first matching value for interpretation
-                seen.append((ridx, values[0]))
+    for path in sorted(all_paths):
+        leaf = _is_leaf(path, all_paths)
+        first_value = "-"
+        if leaf:
+            for record in records:
+                values = _values_for_path(record, path)
+                if values:
+                    first_value = _compact_json(values[0])
+                    break
 
-        if seen:
-            pick_idx = _even_indices(len(seen), sample_count)
-            samples = [f"#{seen[i][0] + 1}: {_compact_json(seen[i][1])}" for i in pick_idx]
-        else:
-            samples = ["-"]
-
-        infos.append(FieldInfo(path=path, depth=_path_depth(path), samples=samples))
+        infos.append(
+            FieldInfo(
+                path=path,
+                depth=_path_depth(path),
+                is_leaf=leaf,
+                first_value=first_value,
+            )
+        )
 
     return infos
 
 
 def _display_path(path: str, depth: int) -> str:
     return f"{'  ' * depth}{path}"
+
+
+def _descendant_leaves(path: str, infos: list[FieldInfo]) -> set[str]:
+    descendants: set[str] = set()
+    for info in infos:
+        if info.is_leaf and (info.path == path or info.path.startswith(path + ".") or info.path.startswith(path + "[]")):
+            descendants.add(info.path)
+    return descendants
+
+
+def _resolve_blacklist_from_editor(edited_rows: list[dict[str, Any]], infos: list[FieldInfo]) -> set[str]:
+    info_map = {info.path: info for info in infos}
+    resolved: set[str] = set()
+
+    for row in edited_rows:
+        path = row["Path"]
+        is_marked = bool(row.get("Blacklist"))
+        info = info_map[path]
+
+        if not is_marked:
+            continue
+
+        if info.is_leaf:
+            resolved.add(path)
+        else:
+            resolved.update(_descendant_leaves(path, infos))
+
+    return resolved
 
 
 def _export_blacklist() -> None:
@@ -182,7 +186,7 @@ def main() -> None:
     _init_state()
 
     st.title("🧭 JSON Blacklist Builder")
-    st.caption("Einzigartige Felder mit Beispielwerten prüfen und Blacklist für spätere Bereinigung erstellen.")
+    st.caption("Felder hierarchisch prüfen und finale Felder für die Bereinigung blacklisten.")
 
     left, right = st.columns([1, 2.2])
 
@@ -190,71 +194,64 @@ def main() -> None:
         st.subheader("Optionen")
         _load_json()
 
-        st.session_state.sample_count = st.number_input(
-            "Anzahl Beispielwerte pro Feld (X)",
-            min_value=2,
-            max_value=10,
-            value=int(st.session_state.sample_count),
-            step=1,
-            help="Standard: 3. Die Beispiele werden möglichst gleichmäßig über vorhandene Einträge verteilt.",
-        )
-
         if st.button("Feldanalyse aktualisieren", use_container_width=True):
             if st.session_state.records:
-                st.session_state.field_infos = _build_field_infos(
-                    st.session_state.records,
-                    int(st.session_state.sample_count),
-                )
+                st.session_state.field_infos = _build_field_infos(st.session_state.records)
 
         if st.button("Blacklist zurücksetzen", use_container_width=True):
             st.session_state.blacklist = set()
 
         if st.session_state.records:
             if not st.session_state.field_infos:
-                st.session_state.field_infos = _build_field_infos(
-                    st.session_state.records,
-                    int(st.session_state.sample_count),
-                )
+                st.session_state.field_infos = _build_field_infos(st.session_state.records)
 
+            leaf_count = sum(1 for f in st.session_state.field_infos if f.is_leaf)
             st.info(
                 f"Datei: {st.session_state.filename}\n"
                 f"Einträge: {len(st.session_state.records)}\n"
-                f"Einzigartige Felder: {len(st.session_state.field_infos)}\n"
+                f"Felder gesamt: {len(st.session_state.field_infos)}\n"
+                f"Finale Felder: {leaf_count}\n"
                 f"Blacklist-Einträge: {len(st.session_state.blacklist)}"
             )
 
-            st.markdown("#### Blacklist")
-            st.dataframe({"Field": sorted(st.session_state.blacklist)}, use_container_width=True, height=200)
+            st.markdown("#### Blacklist (nur finale Felder)")
+            st.dataframe({"Field": sorted(st.session_state.blacklist)}, use_container_width=True, height=220)
             _export_blacklist()
         else:
             st.info("Bitte zuerst eine JSON-Datei laden.")
 
     with right:
-        st.subheader("Feldübersicht (Hierarchie + Beispielwerte)")
+        st.subheader("Feldübersicht (Hierarchie)")
 
         if not st.session_state.records:
             st.markdown(
                 "### Anleitung\n"
                 "1. JSON-Datei laden.\n"
-                "2. X Beispielwerte einstellen (Standard 3, min 2, max 10).\n"
-                "3. Felder in der Tabelle für die Blacklist markieren.\n"
-                "4. Blacklist exportieren."
+                "2. Haken setzen, um Felder zu blacklisten.\n"
+                "3. Nicht-finale Felder markieren automatisch alle untergeordneten finalen Felder.\n"
+                "4. Export der Blacklist als JSON."
             )
             return
 
         infos: list[FieldInfo] = st.session_state.field_infos
 
         rows: list[dict[str, Any]] = []
-        max_samples = int(st.session_state.sample_count)
         for info in infos:
-            row: dict[str, Any] = {
-                "Blacklist": info.path in st.session_state.blacklist,
-                "Field": _display_path(info.path, info.depth),
-                "Path": info.path,
-            }
-            for idx in range(max_samples):
-                row[f"Beispiel {idx + 1}"] = info.samples[idx] if idx < len(info.samples) else "-"
-            rows.append(row)
+            if info.is_leaf:
+                checked = info.path in st.session_state.blacklist
+            else:
+                descendants = _descendant_leaves(info.path, infos)
+                checked = bool(descendants) and descendants.issubset(st.session_state.blacklist)
+
+            rows.append(
+                {
+                    "Blacklist": checked,
+                    "Field": _display_path(info.path, info.depth),
+                    "Path": info.path,
+                    "Final": "Ja" if info.is_leaf else "Nein",
+                    "Erster Wert": info.first_value if info.is_leaf else "-",
+                }
+            )
 
         edited = st.data_editor(
             rows,
@@ -264,17 +261,18 @@ def main() -> None:
             column_config={
                 "Blacklist": st.column_config.CheckboxColumn(
                     "Blacklist",
-                    help="Aktiviere, um das Field in die Blacklist aufzunehmen.",
+                    help="Bei übergeordneten Feldern werden alle untergeordneten finalen Felder markiert.",
                     default=False,
                 ),
                 "Field": st.column_config.TextColumn("Field (Hierarchie)", disabled=True),
                 "Path": st.column_config.TextColumn("Pfad", disabled=True),
+                "Final": st.column_config.TextColumn("Finales Feld", disabled=True),
+                "Erster Wert": st.column_config.TextColumn("Erster gefundener Wert", disabled=True),
             },
-            disabled=["Field", "Path"] + [f"Beispiel {i + 1}" for i in range(max_samples)],
+            disabled=["Field", "Path", "Final", "Erster Wert"],
         )
 
-        new_blacklist = {row["Path"] for row in edited if row.get("Blacklist")}
-        st.session_state.blacklist = new_blacklist
+        st.session_state.blacklist = _resolve_blacklist_from_editor(edited, infos)
 
 
 if __name__ == "__main__":
