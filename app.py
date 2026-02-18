@@ -1,3 +1,4 @@
+import html
 import json
 from typing import Any
 
@@ -11,45 +12,24 @@ st.set_page_config(
 )
 
 
-def _safe_preview(value: Any) -> str:
-    """Short single-line preview for tree/list items."""
-    text = json.dumps(value, ensure_ascii=False)
-    return text if len(text) <= 120 else text[:117] + "..."
-
-
-
-def _to_record(item: Any) -> dict[str, Any]:
-    if isinstance(item, dict):
-        return item
-    return {"value": item}
-
-
-def _render_json_like_panel(record: dict[str, Any]) -> None:
-    """IDE-like left panel showing field names and values."""
-    st.markdown("#### Strukturansicht (IDE-Stil)")
-
-    lines = ["{"]
-    for idx, (key, value) in enumerate(record.items()):
-        comma = "," if idx < len(record) - 1 else ""
-        lines.append(f'  "{key}": {_safe_preview(value)}{comma}')
-    lines.append("}")
-
-    st.code("\n".join(lines), language="json")
+IGNORED_METADATA_KEYS = {"metadata", "meta", "_meta", "header", "headers"}
 
 
 def _init_state() -> None:
-    if "records" not in st.session_state:
-        st.session_state.records = []
-    if "filename" not in st.session_state:
-        st.session_state.filename = ""
-    if "example_count" not in st.session_state:
-        st.session_state.example_count = 1
-    if "selected_index" not in st.session_state:
-        st.session_state.selected_index = 0
-    if "whitelist" not in st.session_state:
-        st.session_state.whitelist = set()
-    if "blacklist" not in st.session_state:
-        st.session_state.blacklist = set()
+    defaults = {
+        "raw_json": None,
+        "filename": "",
+        "scope_data": None,
+        "scope_label": "",
+        "all_variable_paths": [],
+        "whitelist": set(),
+        "blacklist": set(),
+        "interaction_mode": "Whitelist",
+        "hide_blacklisted": False,
+    }
+    for key, value in defaults.items():
+        if key not in st.session_state:
+            st.session_state[key] = value
 
 
 def _clear_lists() -> None:
@@ -57,47 +37,141 @@ def _clear_lists() -> None:
     st.session_state.blacklist = set()
 
 
-def _handle_file_upload() -> None:
+def _load_json() -> None:
     uploaded = st.file_uploader("JSON-Datei laden", type=["json"])
-    if uploaded is None:
+    if not uploaded:
         return
 
     try:
-        data = json.load(uploaded)
+        st.session_state.raw_json = json.load(uploaded)
+        st.session_state.filename = uploaded.name
     except Exception as err:
         st.error(f"Datei konnte nicht gelesen werden: {err}")
         return
 
-    if isinstance(data, list):
-        raw_records = data
+
+def _is_metadata_key(key: str) -> bool:
+    return key.lower() in IGNORED_METADATA_KEYS
+
+
+def _find_candidate_scopes(data: Any) -> dict[str, Any]:
+    """Find meaningful main-body scopes and exclude common metadata containers."""
+    scopes: dict[str, Any] = {"Gesamtes JSON": data}
+
+    if isinstance(data, dict):
+        for key, value in data.items():
+            if _is_metadata_key(key):
+                continue
+            if isinstance(value, (dict, list)):
+                scopes[f"Top-Level: {key}"] = value
+
+            if isinstance(value, dict):
+                for nested_key, nested_value in value.items():
+                    if _is_metadata_key(nested_key):
+                        continue
+                    if isinstance(nested_value, (dict, list)):
+                        scopes[f"{key}.{nested_key}"] = nested_value
+
+    return scopes
+
+
+def _extract_variable_paths(data: Any, base: str = "") -> set[str]:
+    paths: set[str] = set()
+    if isinstance(data, dict):
+        for key, value in data.items():
+            if _is_metadata_key(key):
+                continue
+            current = f"{base}.{key}" if base else key
+            paths.add(current)
+            paths.update(_extract_variable_paths(value, current))
+    elif isinstance(data, list):
+        for item in data:
+            paths.update(_extract_variable_paths(item, base))
+    return paths
+
+
+def _format_scalar(value: Any) -> str:
+    text = json.dumps(value, ensure_ascii=False)
+    if len(text) > 100:
+        return text[:97] + "..."
+    return text
+
+
+def _render_editor_line(indent: int, content: str, color: str = "#d4d4d4") -> None:
+    st.markdown(
+        f"<div style='padding-left:{indent * 18}px; color:{color}; font-family: monospace; white-space: pre;'>{content}</div>",
+        unsafe_allow_html=True,
+    )
+
+
+def _add_to_mode(path: str) -> None:
+    if st.session_state.interaction_mode == "Whitelist":
+        st.session_state.whitelist.add(path)
+        st.session_state.blacklist.discard(path)
     else:
-        raw_records = [data]
-
-    if not raw_records:
-        st.warning("Die JSON-Datei enthält keine Elemente.")
-        return
-
-    st.session_state.records = [_to_record(item) for item in raw_records]
-    st.session_state.filename = uploaded.name
-    st.session_state.example_count = min(st.session_state.example_count, len(st.session_state.records))
-    st.session_state.selected_index = 0
+        st.session_state.blacklist.add(path)
+        st.session_state.whitelist.discard(path)
 
 
-def _move_key_to_whitelist(key: str) -> None:
-    st.session_state.whitelist.add(key)
-    st.session_state.blacklist.discard(key)
+def _is_hidden(path: str) -> bool:
+    if not st.session_state.hide_blacklisted:
+        return False
+    # hide exact field and its children if blacklisted
+    for bl in st.session_state.blacklist:
+        if path == bl or path.startswith(bl + "."):
+            return True
+    return False
 
 
-def _move_key_to_blacklist(key: str) -> None:
-    st.session_state.blacklist.add(key)
-    st.session_state.whitelist.discard(key)
+def _render_json_interactive(data: Any, base: str = "", indent: int = 0) -> None:
+    if isinstance(data, dict):
+        _render_editor_line(indent, "{")
+        for key, value in data.items():
+            if _is_metadata_key(key):
+                continue
+            path = f"{base}.{key}" if base else key
+            if _is_hidden(path):
+                continue
+
+            cols = st.columns([0.45, 0.55])
+            with cols[0]:
+                label = f"{path}"
+                color = "#22c55e" if path in st.session_state.whitelist else "#ef4444" if path in st.session_state.blacklist else "#60a5fa"
+                if st.button(
+                    f"{label}",
+                    key=f"btn_{path}",
+                    help=f"Klicke zum Hinzufügen zur {st.session_state.interaction_mode}.",
+                    use_container_width=True,
+                ):
+                    _add_to_mode(path)
+                st.markdown(
+                    f"<div style='padding-left:{indent * 18}px; font-family: monospace; color:{color};'>\"{html.escape(key)}\"</div>",
+                    unsafe_allow_html=True,
+                )
+            with cols[1]:
+                if isinstance(value, (dict, list)):
+                    _render_editor_line(indent, ":")
+                    _render_json_interactive(value, path, indent + 1)
+                else:
+                    _render_editor_line(indent, f": {_format_scalar(value)}", "#d4d4d4")
+        _render_editor_line(indent, "}")
+    elif isinstance(data, list):
+        _render_editor_line(indent, "[")
+        for idx, item in enumerate(data):
+            path = f"{base}[{idx}]" if base else f"[{idx}]"
+            if isinstance(item, (dict, list)):
+                _render_json_interactive(item, base, indent + 1)
+            else:
+                _render_editor_line(indent + 1, _format_scalar(item), "#d4d4d4")
+        _render_editor_line(indent, "]")
+    else:
+        _render_editor_line(indent, _format_scalar(data), "#d4d4d4")
 
 
 def _download_list(label: str, values: set[str]) -> None:
-    sorted_values = sorted(values)
     st.download_button(
         label=f"{label} exportieren",
-        data=json.dumps(sorted_values, ensure_ascii=False, indent=2),
+        data=json.dumps(sorted(values), ensure_ascii=False, indent=2),
         file_name=f"{label.lower()}.json",
         mime="application/json",
         use_container_width=True,
@@ -107,109 +181,87 @@ def _download_list(label: str, values: set[str]) -> None:
 def main() -> None:
     _init_state()
 
-    st.title("🧭 JSON Lister – Whitelist/Blacklist Builder")
-    st.caption("JSON-Datensätze inspizieren wie in einer IDE und relevante Variablennamen sammeln.")
+    st.title("🧭 JSON Lister – IDE-artige Variablenauswahl")
+    st.caption("Fokus auf Fragen/Hauptkörper des JSON; Metadaten werden ausgeblendet.")
 
     with st.sidebar:
         st.subheader("Datenquelle")
-        _handle_file_upload()
+        _load_json()
 
-        if st.session_state.records:
-            max_examples = len(st.session_state.records)
-            count = st.number_input(
-                "Anzahl Beispiele",
-                min_value=1,
-                max_value=max_examples,
-                value=st.session_state.example_count,
-                step=1,
+        if st.session_state.raw_json is not None:
+            scopes = _find_candidate_scopes(st.session_state.raw_json)
+            selected_scope = st.selectbox("Zu analysierender Bereich", options=list(scopes.keys()))
+            st.session_state.scope_label = selected_scope
+            st.session_state.scope_data = scopes[selected_scope]
+
+            st.session_state.interaction_mode = st.radio(
+                "Klickmodus",
+                ["Whitelist", "Blacklist"],
+                horizontal=True,
+                help="Klick auf Variablennamen ordnet den Eintrag dieser Liste zu.",
             )
-            st.session_state.example_count = int(count)
+            st.session_state.hide_blacklisted = st.checkbox(
+                "Blacklist-Einträge in Darstellung verbergen",
+                value=st.session_state.hide_blacklisted,
+            )
 
-            if st.button("Listen zurücksetzen", use_container_width=True):
+            if st.button("Whitelist/Blacklist zurücksetzen", use_container_width=True):
                 _clear_lists()
+
+            paths = sorted(_extract_variable_paths(st.session_state.scope_data))
+            st.session_state.all_variable_paths = paths
 
             st.info(
                 f"Datei: {st.session_state.filename}\n"
-                f"Elemente gesamt: {len(st.session_state.records)}\n"
-                f"Betrachtete Beispiele: {st.session_state.example_count}"
+                f"Bereich: {st.session_state.scope_label}\n"
+                f"Gefundene Variablen: {len(paths)}"
             )
         else:
-            st.info("Bitte zuerst eine JSON-Datei laden.")
+            st.info("Bitte eine JSON-Datei laden.")
 
-    if not st.session_state.records:
+    if st.session_state.scope_data is None:
         st.markdown(
-            ""
-            "### Willkommen\n"
-            "1. Lade links eine JSON-Datei hoch.\n"
-            "2. Wähle die Anzahl der Beispielelemente.\n"
-            "3. Wähle Variablen und verschiebe sie in Whitelist/Blacklist."
+            "### Anleitung\n"
+            "1. JSON-Datei hochladen.\n"
+            "2. Hauptbereich (ohne Metadaten) wählen.\n"
+            "3. Im Editor Variablennamen anklicken und Whitelist/Blacklist erstellen."
         )
         return
 
-    visible_records = st.session_state.records[: st.session_state.example_count]
-
-    top_cols = st.columns([2, 1])
-    with top_cols[0]:
-        st.subheader("Element-Auswahl")
-        options = [f"#{i + 1}" for i in range(len(visible_records))]
-        selected_label = st.radio(
-            "Beispiel-Element",
-            options=options,
-            index=min(st.session_state.selected_index, len(visible_records) - 1),
-            horizontal=True,
-            label_visibility="collapsed",
-        )
-        st.session_state.selected_index = options.index(selected_label)
-
-    record = visible_records[st.session_state.selected_index]
-
-    left, middle, right = st.columns([1.5, 1, 1])
+    left, right = st.columns([2.2, 1])
 
     with left:
-        _render_json_like_panel(record)
-
-    with middle:
-        st.markdown("#### Variablen")
-        keys = list(record.keys())
-        selected_keys = st.multiselect(
-            "Variablennamen auswählen",
-            options=keys,
-            help="Wähle Felder aus dem aktuellen Element.",
+        st.markdown("#### JSON-Editoransicht (anklickbare Variablennamen)")
+        st.markdown(
+            "<div style='background:#1e1e1e; padding:12px; border-radius:8px;'>",
+            unsafe_allow_html=True,
         )
-
-        btn_cols = st.columns(2)
-        with btn_cols[0]:
-            if st.button("→ Whitelist", use_container_width=True):
-                for key in selected_keys:
-                    _move_key_to_whitelist(key)
-        with btn_cols[1]:
-            if st.button("→ Blacklist", use_container_width=True):
-                for key in selected_keys:
-                    _move_key_to_blacklist(key)
-
-        st.markdown("#### Felddetails")
-        selected_key = st.selectbox("Details für Feld", options=keys)
-        st.code(json.dumps(record[selected_key], ensure_ascii=False, indent=2), language="json")
+        _render_json_interactive(st.session_state.scope_data)
+        st.markdown("</div>", unsafe_allow_html=True)
 
     with right:
-        st.markdown("#### Whitelist")
-        st.dataframe({"Variablen": sorted(st.session_state.whitelist)}, use_container_width=True, height=180)
-        remove_wl = st.multiselect("Aus Whitelist entfernen", options=sorted(st.session_state.whitelist), key="rm_wl")
-        if st.button("Whitelist-Einträge entfernen", use_container_width=True):
-            for key in remove_wl:
-                st.session_state.whitelist.discard(key)
-
+        st.markdown("#### Whitelist (grün)")
+        st.dataframe({"Variable": sorted(st.session_state.whitelist)}, use_container_width=True, height=180)
+        remove_wl = st.multiselect("Whitelist entfernen", sorted(st.session_state.whitelist), key="remove_wl")
+        if st.button("Aus Whitelist löschen", use_container_width=True):
+            for item in remove_wl:
+                st.session_state.whitelist.discard(item)
         _download_list("Whitelist", st.session_state.whitelist)
 
         st.markdown("---")
-        st.markdown("#### Blacklist")
-        st.dataframe({"Variablen": sorted(st.session_state.blacklist)}, use_container_width=True, height=180)
-        remove_bl = st.multiselect("Aus Blacklist entfernen", options=sorted(st.session_state.blacklist), key="rm_bl")
-        if st.button("Blacklist-Einträge entfernen", use_container_width=True):
-            for key in remove_bl:
-                st.session_state.blacklist.discard(key)
-
+        st.markdown("#### Blacklist (rot)")
+        st.dataframe({"Variable": sorted(st.session_state.blacklist)}, use_container_width=True, height=180)
+        remove_bl = st.multiselect("Blacklist entfernen", sorted(st.session_state.blacklist), key="remove_bl")
+        if st.button("Aus Blacklist löschen", use_container_width=True):
+            for item in remove_bl:
+                st.session_state.blacklist.discard(item)
         _download_list("Blacklist", st.session_state.blacklist)
+
+        st.markdown("---")
+        st.markdown("#### Alle gefundenen Variablen")
+        search = st.text_input("Suche", "")
+        matches = [p for p in st.session_state.all_variable_paths if search.lower() in p.lower()]
+        st.dataframe({"Pfad": matches[:300]}, use_container_width=True, height=220)
 
 
 if __name__ == "__main__":

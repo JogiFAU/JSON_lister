@@ -1,25 +1,18 @@
 # JSON Lister (Streamlit)
 
-Ein lokales Tool mit ansprechender, IDE-ähnlicher UI zum Durchsehen von JSON-Datensätzen und Erstellen einer Whitelist/Blacklist von Variablennamen.
+Ein lokales Tool mit IDE-ähnlicher Ansicht, um JSON-Inhalte zu analysieren und Variablen (Fragen/Felder) in Whitelist oder Blacklist einzuordnen.
 
-## Features
+## Was ist neu
 
-- JSON-Datei laden (Liste von Objekten oder einzelnes Objekt).
-- Anzahl der Beispielelemente festlegen.
-- IDE-ähnliche Strukturansicht des ausgewählten Elements (`"feld": wert`).
-- Variablennamen auswählen und in Whitelist/Blacklist übernehmen.
-- Felddetails anzeigen.
-- White-/Blacklist als JSON exportieren.
-
-## Installation
-
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install streamlit
-```
+- Fokus auf den **Hauptkörper** des JSON (typische Metadatenfelder wie `metadata`, `meta`, `header` werden ignoriert).
+- Darstellung des JSON als editorähnliche Struktur.
+- **Anklickbare Variablennamen**: Klick fügt den Variablenpfad je nach Modus zur Whitelist (grün) oder Blacklist (rot) hinzu.
+- Option: **Blacklist-Einträge ausblenden**, um das Endresultat des Blacklistings direkt zu sehen.
+- Werte bleiben sichtbar (für Interpretation), sind aber nicht der primäre Interaktionspunkt.
 
 ## Start
+
+Voraussetzung: `streamlit` ist installiert.
 
 ```bash
 streamlit run app.py
@@ -33,12 +26,9 @@ start_json_lister.bat
 
 ## Nutzung
 
-1. JSON-Datei in der Sidebar laden.
-2. Anzahl betrachteter Beispiele einstellen.
-3. Oben ein Beispiel-Element auswählen.
-4. Variablen markieren und in Whitelist/Blacklist verschieben.
-5. Listen bei Bedarf bereinigen und exportieren.
-
-## Hinweis
-
-Der Fokus liegt auf den Variablennamen (Tags). Werte dienen primär zur Orientierung bei der Auswahl.
+1. JSON-Datei hochladen.
+2. In der Sidebar den zu analysierenden Bereich auswählen (ohne Metadaten).
+3. Klickmodus wählen: Whitelist oder Blacklist.
+4. Im JSON-Editor Variablennamen anklicken.
+5. Optional Blacklist ausblenden aktivieren.
+6. Listen exportieren.
