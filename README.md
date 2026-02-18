@@ -1,32 +1,30 @@
-# JSON Lister
+# JSON Blacklist Builder (Streamlit)
 
-Ein einfaches lokales Desktop-Tool (Python + Tkinter), um JSON-Datensätze zu inspizieren und Variablennamen in eine Whitelist/Blacklist zu übernehmen.
+Das Tool dient der Auswahl einer **Blacklist für finale Felder** (Leaf-Fields), um später eine Bereinigung durchzuführen.
 
-## Features
+## Kernverhalten
 
-- Öffnet eine JSON-Datei (Liste von Datensätzen oder einzelnes Objekt).
-- Nutzer gibt an, wie viele Beispiel-Elemente betrachtet werden sollen.
-- Für das aktuell gezeigte Element werden **Variablenname (Tag)** und **Wert** angezeigt.
-- Ausgewählte Variablen können in eine **Whitelist** oder **Blacklist** übernommen werden.
-- White-/Blacklist können als JSON exportiert werden.
+- Das JSON wird hierarchisch analysiert und als Feldstruktur dargestellt.
+- **Nur finale Felder** (Felder ohne weitere Unterfelder) sind die eigentlichen Blacklist-Ziele.
+- Für finale Felder wird der **erste gefundene Wert** im Datensatz angezeigt (zur Interpretation).
+- Für nicht-finale Felder wird **kein Wert** angezeigt.
+
+## Markierungslogik
+
+- Wenn ein **finales Feld** markiert wird, landet genau dieses Feld in der Blacklist.
+- Wenn ein **übergeordnetes Feld** markiert wird, werden automatisch **alle untergeordneten finalen Felder** markiert.
+- Export enthält nur finale Felder in der Blacklist.
 
 ## Start
 
-Voraussetzungen: Python 3 (Tkinter ist in Standard-Python enthalten).
+Voraussetzung: `streamlit` ist installiert.
 
 ```bash
-python3 app.py
+streamlit run app.py
 ```
 
-## Bedienung
+## Windows-Start (ohne venv)
 
-1. Auf **„JSON-Datei öffnen“** klicken.
-2. **„Anzahl Beispiele“** eintragen und **„Anwenden“** drücken.
-3. Mit **„Vorheriges“** / **„Nächstes“** durch die gewählte Anzahl Beispiel-Elemente navigieren.
-4. Variablen in der Liste markieren und zu White-/Blacklist hinzufügen.
-5. White-/Blacklist exportieren.
-
-## Hinweise
-
-- Wenn Elemente keine Objekte sind (z. B. Strings/Zahlen), werden sie als `value` angezeigt.
-- Variablennamen sind die zentrale Entscheidungsgrundlage; Werte dienen nur zur Orientierung.
+```bat
+start_json_lister.bat
+```

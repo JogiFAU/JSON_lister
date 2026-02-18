@@ -1,233 +1,278 @@
 import json
-import tkinter as tk
-from tkinter import filedialog, messagebox, ttk
-from pathlib import Path
-from typing import Any, Dict, List
+from dataclasses import dataclass
+from typing import Any
+
+import streamlit as st
 
 
-class JSONListerApp:
-    def __init__(self, root: tk.Tk) -> None:
-        self.root = root
-        self.root.title("JSON Lister – Whitelist/Blacklist Builder")
-        self.root.geometry("1100x700")
+st.set_page_config(page_title="JSON Field Blacklist Builder", page_icon="🧭", layout="wide")
 
-        self.data: List[Any] = []
-        self.current_index = 0
-        self.display_count = 1
-        self.current_item: Dict[str, Any] = {}
 
-        self.whitelist: set[str] = set()
-        self.blacklist: set[str] = set()
+@dataclass
+class FieldInfo:
+    path: str
+    depth: int
+    is_leaf: bool
+    first_value: str
 
-        self._build_ui()
 
-    def _build_ui(self) -> None:
-        top_frame = ttk.Frame(self.root, padding=10)
-        top_frame.pack(fill=tk.X)
+def _init_state() -> None:
+    defaults = {
+        "raw_json": None,
+        "filename": "",
+        "records": [],
+        "blacklist": set(),
+        "field_infos": [],
+    }
+    for key, value in defaults.items():
+        if key not in st.session_state:
+            st.session_state[key] = value
 
-        ttk.Button(top_frame, text="JSON-Datei öffnen", command=self.load_file).pack(side=tk.LEFT)
 
-        ttk.Label(top_frame, text="Anzahl Beispiele:").pack(side=tk.LEFT, padx=(15, 5))
-        self.count_var = tk.StringVar(value="1")
-        ttk.Entry(top_frame, textvariable=self.count_var, width=8).pack(side=tk.LEFT)
+def _load_json() -> None:
+    uploaded = st.file_uploader("JSON-Datei laden", type=["json"])
+    if not uploaded:
+        return
 
-        ttk.Button(top_frame, text="Anwenden", command=self.apply_count).pack(side=tk.LEFT, padx=(8, 0))
+    try:
+        raw = json.load(uploaded)
+    except Exception as err:
+        st.error(f"Datei konnte nicht gelesen werden: {err}")
+        return
 
-        ttk.Button(top_frame, text="Vorheriges", command=self.prev_item).pack(side=tk.LEFT, padx=(20, 5))
-        ttk.Button(top_frame, text="Nächstes", command=self.next_item).pack(side=tk.LEFT)
+    st.session_state.raw_json = raw
+    st.session_state.records = raw if isinstance(raw, list) else [raw]
+    st.session_state.filename = uploaded.name
 
-        self.status_var = tk.StringVar(value="Keine Datei geladen")
-        ttk.Label(top_frame, textvariable=self.status_var).pack(side=tk.RIGHT)
 
-        center_frame = ttk.Frame(self.root, padding=(10, 0, 10, 10))
-        center_frame.pack(fill=tk.BOTH, expand=True)
+def _extract_paths(node: Any, base: str = "") -> set[str]:
+    paths: set[str] = set()
+    if isinstance(node, dict):
+        for key, value in node.items():
+            current = f"{base}.{key}" if base else key
+            paths.add(current)
+            paths.update(_extract_paths(value, current))
+    elif isinstance(node, list):
+        list_base = f"{base}[]" if base else "[]"
+        for item in node:
+            paths.update(_extract_paths(item, list_base))
+    return paths
 
-        # Variablenübersicht
-        vars_frame = ttk.LabelFrame(center_frame, text="Variablen (Tag + Wert des aktuellen Elements)", padding=10)
-        vars_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
-        self.variables_list = tk.Listbox(vars_frame, selectmode=tk.EXTENDED)
-        self.variables_list.pack(fill=tk.BOTH, expand=True)
+def _path_depth(path: str) -> int:
+    return path.count(".") + path.count("[]")
 
-        buttons_frame = ttk.Frame(vars_frame)
-        buttons_frame.pack(fill=tk.X, pady=(8, 0))
 
-        ttk.Button(buttons_frame, text="→ Zur Whitelist", command=self.add_to_whitelist).pack(side=tk.LEFT)
-        ttk.Button(buttons_frame, text="→ Zur Blacklist", command=self.add_to_blacklist).pack(side=tk.LEFT, padx=6)
-
-        # White/Blacklist
-        side_frame = ttk.Frame(center_frame)
-        side_frame.pack(side=tk.RIGHT, fill=tk.BOTH, padx=(10, 0))
-
-        whitelist_frame = ttk.LabelFrame(side_frame, text="Whitelist", padding=10)
-        whitelist_frame.pack(fill=tk.BOTH, expand=True)
-        self.whitelist_list = tk.Listbox(whitelist_frame)
-        self.whitelist_list.pack(fill=tk.BOTH, expand=True)
-
-        wl_buttons = ttk.Frame(whitelist_frame)
-        wl_buttons.pack(fill=tk.X, pady=(8, 0))
-        ttk.Button(wl_buttons, text="Ausgewählte entfernen", command=self.remove_from_whitelist).pack(side=tk.LEFT)
-        ttk.Button(wl_buttons, text="Whitelist exportieren", command=lambda: self.export_list("whitelist")).pack(
-            side=tk.LEFT, padx=6
-        )
-
-        blacklist_frame = ttk.LabelFrame(side_frame, text="Blacklist", padding=10)
-        blacklist_frame.pack(fill=tk.BOTH, expand=True, pady=(10, 0))
-        self.blacklist_list = tk.Listbox(blacklist_frame)
-        self.blacklist_list.pack(fill=tk.BOTH, expand=True)
-
-        bl_buttons = ttk.Frame(blacklist_frame)
-        bl_buttons.pack(fill=tk.X, pady=(8, 0))
-        ttk.Button(bl_buttons, text="Ausgewählte entfernen", command=self.remove_from_blacklist).pack(side=tk.LEFT)
-        ttk.Button(bl_buttons, text="Blacklist exportieren", command=lambda: self.export_list("blacklist")).pack(
-            side=tk.LEFT, padx=6
-        )
-
-    def load_file(self) -> None:
-        file_path = filedialog.askopenfilename(filetypes=[("JSON", "*.json"), ("Alle Dateien", "*.*")])
-        if not file_path:
-            return
-
-        try:
-            with open(file_path, "r", encoding="utf-8") as f:
-                loaded = json.load(f)
-        except Exception as err:
-            messagebox.showerror("Fehler", f"Datei konnte nicht gelesen werden:\n{err}")
-            return
-
-        if isinstance(loaded, list):
-            self.data = loaded
+def _split_path(path: str) -> list[str]:
+    parts: list[str] = []
+    for token in path.split("."):
+        if token.endswith("[]") and token != "[]":
+            parts.append(token[:-2])
+            parts.append("[]")
         else:
-            self.data = [loaded]
+            parts.append(token)
+    return parts
 
-        if not self.data:
-            messagebox.showwarning("Hinweis", "Die JSON-Datei enthält keine Elemente.")
-            return
 
-        self.current_index = 0
-        self.apply_count()
-        self.status_var.set(f"Geladen: {Path(file_path).name} | Elemente: {len(self.data)}")
+def _values_for_path(node: Any, path: str) -> list[Any]:
+    tokens = _split_path(path)
 
-    def apply_count(self) -> None:
-        if not self.data:
-            return
+    def walk(current: Any, idx: int) -> list[Any]:
+        if idx >= len(tokens):
+            return [current]
 
-        try:
-            count = int(self.count_var.get())
-            if count < 1:
-                raise ValueError
-        except ValueError:
-            messagebox.showwarning("Ungültige Eingabe", "Anzahl Beispiele muss eine positive Zahl sein.")
-            self.count_var.set("1")
-            return
+        token = tokens[idx]
+        if token == "[]":
+            if not isinstance(current, list):
+                return []
+            results: list[Any] = []
+            for item in current:
+                results.extend(walk(item, idx + 1))
+            return results
 
-        self.display_count = min(count, len(self.data))
-        self.current_index = 0
-        self.show_current_item()
+        if not isinstance(current, dict) or token not in current:
+            return []
+        return walk(current[token], idx + 1)
 
-    def show_current_item(self) -> None:
-        self.variables_list.delete(0, tk.END)
-        if not self.data:
-            return
+    return walk(node, 0)
 
-        item = self.data[self.current_index]
-        if not isinstance(item, dict):
-            item = {"value": item}
 
-        self.current_item = item
+def _compact_json(value: Any, max_len: int = 100) -> str:
+    text = json.dumps(value, ensure_ascii=False)
+    return text if len(text) <= max_len else text[: max_len - 3] + "..."
 
-        for key, value in item.items():
-            short_val = json.dumps(value, ensure_ascii=False)
-            self.variables_list.insert(tk.END, f"{key} = {short_val}")
 
-        self.status_var.set(
-            f"Element {self.current_index + 1}/{self.display_count} (Gesamt im Datensatz: {len(self.data)})"
+def _is_leaf(path: str, all_paths: set[str]) -> bool:
+    prefix_dot = path + "."
+    prefix_arr = path + "[]"
+    for other in all_paths:
+        if other != path and (other.startswith(prefix_dot) or other.startswith(prefix_arr)):
+            return False
+    return True
+
+
+def _build_field_infos(records: list[Any]) -> list[FieldInfo]:
+    all_paths: set[str] = set()
+    for record in records:
+        all_paths.update(_extract_paths(record))
+
+    infos: list[FieldInfo] = []
+    for path in sorted(all_paths):
+        leaf = _is_leaf(path, all_paths)
+        first_value = "-"
+        if leaf:
+            for record in records:
+                values = _values_for_path(record, path)
+                if values:
+                    first_value = _compact_json(values[0])
+                    break
+
+        infos.append(
+            FieldInfo(
+                path=path,
+                depth=_path_depth(path),
+                is_leaf=leaf,
+                first_value=first_value,
+            )
         )
 
-    def prev_item(self) -> None:
-        if not self.data:
-            return
-        self.current_index = (self.current_index - 1) % self.display_count
-        self.show_current_item()
+    return infos
 
-    def next_item(self) -> None:
-        if not self.data:
-            return
-        self.current_index = (self.current_index + 1) % self.display_count
-        self.show_current_item()
 
-    def _selected_keys(self) -> List[str]:
-        selected_indices = self.variables_list.curselection()
-        keys: List[str] = []
-        for idx in selected_indices:
-            row = self.variables_list.get(idx)
-            key = row.split(" = ", 1)[0].strip()
-            if key:
-                keys.append(key)
-        return keys
+def _display_path(path: str, depth: int) -> str:
+    return f"{'  ' * depth}{path}"
 
-    def add_to_whitelist(self) -> None:
-        keys = self._selected_keys()
-        for key in keys:
-            self.whitelist.add(key)
-            self.blacklist.discard(key)
-        self.refresh_lists()
 
-    def add_to_blacklist(self) -> None:
-        keys = self._selected_keys()
-        for key in keys:
-            self.blacklist.add(key)
-            self.whitelist.discard(key)
-        self.refresh_lists()
+def _descendant_leaves(path: str, infos: list[FieldInfo]) -> set[str]:
+    descendants: set[str] = set()
+    for info in infos:
+        if info.is_leaf and (info.path == path or info.path.startswith(path + ".") or info.path.startswith(path + "[]")):
+            descendants.add(info.path)
+    return descendants
 
-    def remove_from_whitelist(self) -> None:
-        for idx in reversed(self.whitelist_list.curselection()):
-            self.whitelist.discard(self.whitelist_list.get(idx))
-        self.refresh_lists()
 
-    def remove_from_blacklist(self) -> None:
-        for idx in reversed(self.blacklist_list.curselection()):
-            self.blacklist.discard(self.blacklist_list.get(idx))
-        self.refresh_lists()
+def _resolve_blacklist_from_editor(edited_rows: list[dict[str, Any]], infos: list[FieldInfo]) -> set[str]:
+    info_map = {info.path: info for info in infos}
+    resolved: set[str] = set()
 
-    def refresh_lists(self) -> None:
-        self.whitelist_list.delete(0, tk.END)
-        self.blacklist_list.delete(0, tk.END)
+    for row in edited_rows:
+        path = row["Path"]
+        is_marked = bool(row.get("Blacklist"))
+        info = info_map[path]
 
-        for key in sorted(self.whitelist):
-            self.whitelist_list.insert(tk.END, key)
-        for key in sorted(self.blacklist):
-            self.blacklist_list.insert(tk.END, key)
+        if not is_marked:
+            continue
 
-    def export_list(self, mode: str) -> None:
-        values = sorted(self.whitelist if mode == "whitelist" else self.blacklist)
-        if not values:
-            messagebox.showinfo("Hinweis", f"Die {mode} ist leer.")
-            return
+        if info.is_leaf:
+            resolved.add(path)
+        else:
+            resolved.update(_descendant_leaves(path, infos))
 
-        file_path = filedialog.asksaveasfilename(
-            title=f"{mode.capitalize()} speichern",
-            defaultextension=".json",
-            filetypes=[("JSON", "*.json"), ("Text", "*.txt")],
-            initialfile=f"{mode}.json",
-        )
-        if not file_path:
-            return
+    return resolved
 
-        try:
-            with open(file_path, "w", encoding="utf-8") as f:
-                json.dump(values, f, ensure_ascii=False, indent=2)
-        except Exception as err:
-            messagebox.showerror("Fehler", f"Export fehlgeschlagen:\n{err}")
-            return
 
-        messagebox.showinfo("Erfolg", f"{mode.capitalize()} exportiert nach:\n{file_path}")
+def _export_blacklist() -> None:
+    payload = json.dumps(sorted(st.session_state.blacklist), ensure_ascii=False, indent=2)
+    st.download_button(
+        "Blacklist exportieren",
+        data=payload,
+        file_name="blacklist.json",
+        mime="application/json",
+        use_container_width=True,
+    )
 
 
 def main() -> None:
-    root = tk.Tk()
-    app = JSONListerApp(root)
-    root.mainloop()
+    _init_state()
+
+    st.title("🧭 JSON Blacklist Builder")
+    st.caption("Felder hierarchisch prüfen und finale Felder für die Bereinigung blacklisten.")
+
+    left, right = st.columns([1, 2.2])
+
+    with left:
+        st.subheader("Optionen")
+        _load_json()
+
+        if st.button("Feldanalyse aktualisieren", use_container_width=True):
+            if st.session_state.records:
+                st.session_state.field_infos = _build_field_infos(st.session_state.records)
+
+        if st.button("Blacklist zurücksetzen", use_container_width=True):
+            st.session_state.blacklist = set()
+
+        if st.session_state.records:
+            if not st.session_state.field_infos:
+                st.session_state.field_infos = _build_field_infos(st.session_state.records)
+
+            leaf_count = sum(1 for f in st.session_state.field_infos if f.is_leaf)
+            st.info(
+                f"Datei: {st.session_state.filename}\n"
+                f"Einträge: {len(st.session_state.records)}\n"
+                f"Felder gesamt: {len(st.session_state.field_infos)}\n"
+                f"Finale Felder: {leaf_count}\n"
+                f"Blacklist-Einträge: {len(st.session_state.blacklist)}"
+            )
+
+            st.markdown("#### Blacklist (nur finale Felder)")
+            st.dataframe({"Field": sorted(st.session_state.blacklist)}, use_container_width=True, height=220)
+            _export_blacklist()
+        else:
+            st.info("Bitte zuerst eine JSON-Datei laden.")
+
+    with right:
+        st.subheader("Feldübersicht (Hierarchie)")
+
+        if not st.session_state.records:
+            st.markdown(
+                "### Anleitung\n"
+                "1. JSON-Datei laden.\n"
+                "2. Haken setzen, um Felder zu blacklisten.\n"
+                "3. Nicht-finale Felder markieren automatisch alle untergeordneten finalen Felder.\n"
+                "4. Export der Blacklist als JSON."
+            )
+            return
+
+        infos: list[FieldInfo] = st.session_state.field_infos
+
+        rows: list[dict[str, Any]] = []
+        for info in infos:
+            if info.is_leaf:
+                checked = info.path in st.session_state.blacklist
+            else:
+                descendants = _descendant_leaves(info.path, infos)
+                checked = bool(descendants) and descendants.issubset(st.session_state.blacklist)
+
+            rows.append(
+                {
+                    "Blacklist": checked,
+                    "Field": _display_path(info.path, info.depth),
+                    "Path": info.path,
+                    "Final": "Ja" if info.is_leaf else "Nein",
+                    "Erster Wert": info.first_value if info.is_leaf else "-",
+                }
+            )
+
+        edited = st.data_editor(
+            rows,
+            use_container_width=True,
+            hide_index=True,
+            key="field_editor",
+            column_config={
+                "Blacklist": st.column_config.CheckboxColumn(
+                    "Blacklist",
+                    help="Bei übergeordneten Feldern werden alle untergeordneten finalen Felder markiert.",
+                    default=False,
+                ),
+                "Field": st.column_config.TextColumn("Field (Hierarchie)", disabled=True),
+                "Path": st.column_config.TextColumn("Pfad", disabled=True),
+                "Final": st.column_config.TextColumn("Finales Feld", disabled=True),
+                "Erster Wert": st.column_config.TextColumn("Erster gefundener Wert", disabled=True),
+            },
+            disabled=["Field", "Path", "Final", "Erster Wert"],
+        )
+
+        st.session_state.blacklist = _resolve_blacklist_from_editor(edited, infos)
 
 
 if __name__ == "__main__":
