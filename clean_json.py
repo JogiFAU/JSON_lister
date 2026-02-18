@@ -54,10 +54,46 @@ def delete_path(node: Any, tokens: list[str], idx: int = 0) -> None:
     delete_path(child, tokens, idx + 1)
 
 
+
+
+def _transform_question(question: dict[str, Any]) -> None:
+    answers = question.get('answers')
+    if isinstance(answers, list):
+        for idx, answer in enumerate(answers, start=1):
+            if isinstance(answer, dict):
+                answer['index'] = idx
+
+    correct_indices = question.get('correctIndices')
+    if isinstance(correct_indices, list):
+        numeric_values = [value for value in correct_indices if isinstance(value, int)]
+        if numeric_values and 0 in numeric_values:
+            question['correctIndices'] = [value + 1 if isinstance(value, int) else value for value in correct_indices]
+
+    correct_answers = question.get('correctAnswers')
+    if isinstance(correct_answers, list):
+        indices = [entry.get('index') for entry in correct_answers if isinstance(entry, dict)]
+        if any(isinstance(index, int) and index == 0 for index in indices):
+            for entry in correct_answers:
+                if isinstance(entry, dict) and isinstance(entry.get('index'), int):
+                    entry['index'] += 1
+
+
+def _apply_question_transformations(node: Any) -> None:
+    if isinstance(node, dict):
+        if isinstance(node.get('answers'), list):
+            _transform_question(node)
+        for value in node.values():
+            _apply_question_transformations(value)
+    elif isinstance(node, list):
+        for item in node:
+            _apply_question_transformations(item)
+
 def clean_data(data: Any, blacklist_paths: list[str]) -> Any:
     for path in blacklist_paths:
         tokens = split_path(path)
         delete_path(data, tokens)
+
+    _apply_question_transformations(data)
     return data
 
 
