@@ -1,27 +1,26 @@
-# JSON Lister (Streamlit)
+# JSON Blacklist Builder (Streamlit)
 
-Ein lokales Tool mit IDE-ähnlicher Darstellung: links die Optionenleiste, rechts der komplette JSON-Inhalt. Variablennamen sind klickbar und werden je nach Modus farbig markiert.
+Das Tool hilft dabei, aus einem JSON-Datensatz eine **Blacklist von Feldern** zu erstellen, die später für eine Bereinigung verwendet werden kann.
 
-## Features
+## Ziel
 
-- Gesamtes JSON wird wie in einem Editor dargestellt.
-- **Klickbare Variablenpfade** im JSON.
-- Drei Modi für Klicks auf Variablen:
-  - **Whitelist** (grün)
-  - **Blacklist** (rot)
-  - **Zuordnung aufheben** (Markierung entfernen)
-- Bereits geflaggte Variablen werden automatisch farbig erkannt und angezeigt.
-- Option: Blacklist-Einträge in der Darstellung ausblenden.
-- Export von Whitelist und Blacklist als JSON.
+- Aus dem Datensatz jedes **einzigartige Field** genau einmal erkennen (inkl. Hierarchie/Pfad).
+- Pro Field **X Beispielwerte** anzeigen, um die Bedeutung besser zu interpretieren.
+- Der Nutzer markiert anschließend die gewünschten Felder für die **Blacklist**.
+- Die Blacklist kann als JSON exportiert werden.
 
-## Wichtige Logik bei Arrays
+## Verhalten der Beispielwerte (X)
 
-Felder werden **einzigartig als Schema-Pfad** behandelt (z. B. `Questions[].Text`).
-Das bedeutet:
+- X ist in den Einstellungen konfigurierbar.
+- Standard: **3**, Minimum: **2**, Maximum: **10**.
+- Die Beispiele werden möglichst gleichmäßig über alle Einträge verteilt.
+  - Bei X=3 wird typischerweise angezeigt: erster, mittlerer (aufgerundet), letzter vorhandener Wert.
 
-- Wenn du `Questions[].Text` markierst, gilt das automatisch für **alle** Einträge in `Questions`, die `Text` besitzen.
-- Du musst nicht jedes Element einzeln auswählen.
-- Trotzdem bleibt jedes einzigartige Feld separat auswählbar (z. B. `Questions[].Id`, `Questions[].Type`, `Questions[].Text`).
+## Wichtige Hinweise
+
+- Felder in Arrays werden als schemaartiger Pfad normalisiert, z. B. `Questions[].Text`.
+- Dadurch ist jedes Feld nur einmal auswählbar, auch wenn es in vielen Einträgen vorkommt.
+- In der Tabelle sind die Felder hierarchisch eingerückt dargestellt.
 
 ## Start
 
@@ -36,11 +35,3 @@ streamlit run app.py
 ```bat
 start_json_lister.bat
 ```
-
-## Nutzung
-
-1. Links JSON-Datei laden.
-2. Klickmodus auswählen.
-3. Rechts auf Variablenpfade klicken.
-4. Optional Blacklist-Ausblendung aktivieren.
-5. Whitelist/Blacklist exportieren.

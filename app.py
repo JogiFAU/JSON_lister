@@ -1,31 +1,32 @@
-import html
 import json
+from dataclasses import dataclass
 from typing import Any
 
 import streamlit as st
 
 
-st.set_page_config(page_title="JSON Lister IDE", page_icon="🧭", layout="wide")
+st.set_page_config(page_title="JSON Field Blacklist Builder", page_icon="🧭", layout="wide")
+
+
+@dataclass
+class FieldInfo:
+    path: str
+    depth: int
+    samples: list[str]
 
 
 def _init_state() -> None:
     defaults = {
         "raw_json": None,
         "filename": "",
-        "whitelist": set(),
+        "records": [],
+        "sample_count": 3,
         "blacklist": set(),
-        "interaction_mode": "Whitelist",
-        "hide_blacklisted": False,
-        "all_variable_paths": [],
+        "field_infos": [],
     }
     for key, value in defaults.items():
         if key not in st.session_state:
             st.session_state[key] = value
-
-
-def _clear_lists() -> None:
-    st.session_state.whitelist = set()
-    st.session_state.blacklist = set()
 
 
 def _load_json() -> None:
@@ -34,150 +35,144 @@ def _load_json() -> None:
         return
 
     try:
-        st.session_state.raw_json = json.load(uploaded)
-        st.session_state.filename = uploaded.name
+        raw = json.load(uploaded)
     except Exception as err:
         st.error(f"Datei konnte nicht gelesen werden: {err}")
+        return
+
+    if isinstance(raw, list):
+        records = raw
+    else:
+        records = [raw]
+
+    st.session_state.raw_json = raw
+    st.session_state.records = records
+    st.session_state.filename = uploaded.name
 
 
-def _extract_variable_paths(data: Any, base: str = "") -> set[str]:
-    """Return unique schema-like paths (arrays normalized as [])."""
+def _extract_paths(node: Any, base: str = "") -> set[str]:
     paths: set[str] = set()
-    if isinstance(data, dict):
-        for key, value in data.items():
+
+    if isinstance(node, dict):
+        for key, value in node.items():
             current = f"{base}.{key}" if base else key
             paths.add(current)
-            paths.update(_extract_variable_paths(value, current))
-    elif isinstance(data, list):
+            paths.update(_extract_paths(value, current))
+    elif isinstance(node, list):
         list_base = f"{base}[]" if base else "[]"
-        for item in data:
-            paths.update(_extract_variable_paths(item, list_base))
+        for item in node:
+            paths.update(_extract_paths(item, list_base))
+
     return paths
 
 
-def _format_scalar(value: Any) -> str:
-    return json.dumps(value, ensure_ascii=False)
+def _path_depth(path: str) -> int:
+    depth = path.count(".")
+    depth += path.count("[]")
+    return depth
 
 
-def _apply_mode(path: str) -> None:
-    mode = st.session_state.interaction_mode
-    if mode == "Whitelist":
-        st.session_state.whitelist.add(path)
-        st.session_state.blacklist.discard(path)
-    elif mode == "Blacklist":
-        st.session_state.blacklist.add(path)
-        st.session_state.whitelist.discard(path)
-    else:  # Zuordnung aufheben
-        st.session_state.blacklist.discard(path)
-        st.session_state.whitelist.discard(path)
+def _split_path(path: str) -> list[str]:
+    parts: list[str] = []
+    for token in path.split("."):
+        if token.endswith("[]") and token != "[]":
+            parts.append(token[:-2])
+            parts.append("[]")
+        else:
+            parts.append(token)
+    return parts
 
 
-def _path_color(path: str) -> str:
-    if path in st.session_state.whitelist:
-        return "#22c55e"  # green
-    if path in st.session_state.blacklist:
-        return "#ef4444"  # red
-    return "#93c5fd"  # blue
+def _values_for_path(node: Any, path: str) -> list[Any]:
+    tokens = _split_path(path)
+
+    def walk(current: Any, idx: int) -> list[Any]:
+        if idx >= len(tokens):
+            return [current]
+
+        token = tokens[idx]
+        if token == "[]":
+            if not isinstance(current, list):
+                return []
+            results: list[Any] = []
+            for item in current:
+                results.extend(walk(item, idx + 1))
+            return results
+
+        if not isinstance(current, dict) or token not in current:
+            return []
+        return walk(current[token], idx + 1)
+
+    return walk(node, 0)
 
 
-def _should_hide(path: str) -> bool:
-    if not st.session_state.hide_blacklisted:
-        return False
-    for blacklisted in st.session_state.blacklist:
-        if path == blacklisted or path.startswith(blacklisted + ".") or path.startswith(blacklisted + "[]"):
-            return True
-    return False
+def _compact_json(value: Any, max_len: int = 90) -> str:
+    text = json.dumps(value, ensure_ascii=False)
+    if len(text) > max_len:
+        return text[: max_len - 3] + "..."
+    return text
 
 
-def _editor_line(indent: int, text: str, color: str = "#d4d4d4") -> None:
-    st.markdown(
-        (
-            f"<div style='padding-left:{indent * 18}px; color:{color}; "
-            "font-family: Consolas, Menlo, monospace; white-space: pre;'>"
-            f"{html.escape(text)}</div>"
-        ),
-        unsafe_allow_html=True,
-    )
+def _even_indices(count: int, picks: int) -> list[int]:
+    if count <= 0:
+        return []
+    if picks >= count:
+        return list(range(count))
+    if picks == 1:
+        return [0]
+
+    step = (count - 1) / (picks - 1)
+    raw = [round(i * step) for i in range(picks)]
+
+    # strictly increasing & bounded
+    indices: list[int] = []
+    prev = -1
+    for idx in raw:
+        idx = max(idx, prev + 1)
+        idx = min(idx, count - (picks - len(indices)))
+        indices.append(idx)
+        prev = idx
+
+    indices[0] = 0
+    indices[-1] = count - 1
+    return indices
 
 
-def _render_interactive_json(
-    data: Any,
-    base_schema: str = "",
-    base_concrete: str = "",
-    indent: int = 0,
-) -> None:
-    """
-    Render full JSON. Click assigns schema-like path (with []) so one field selection
-    applies to all matching array elements.
-    """
-    if isinstance(data, dict):
-        _editor_line(indent, "{")
-        visible_items = []
-        for key, value in data.items():
-            schema_path = f"{base_schema}.{key}" if base_schema else key
-            concrete_path = f"{base_concrete}.{key}" if base_concrete else key
-            if _should_hide(schema_path):
-                continue
-            visible_items.append((key, value, schema_path, concrete_path))
+def _build_field_infos(records: list[Any], sample_count: int) -> list[FieldInfo]:
+    unique_paths: set[str] = set()
+    for record in records:
+        unique_paths.update(_extract_paths(record))
 
-        for idx, (key, value, schema_path, concrete_path) in enumerate(visible_items):
-            comma = "," if idx < len(visible_items) - 1 else ""
+    infos: list[FieldInfo] = []
+    for path in sorted(unique_paths):
+        seen: list[tuple[int, Any]] = []
+        for ridx, record in enumerate(records):
+            values = _values_for_path(record, path)
+            if values:
+                # per record first matching value for interpretation
+                seen.append((ridx, values[0]))
 
-            row = st.columns([0.44, 0.56])
-            with row[0]:
-                if st.button(schema_path, key=f"var_{concrete_path}", use_container_width=True):
-                    _apply_mode(schema_path)
+        if seen:
+            pick_idx = _even_indices(len(seen), sample_count)
+            samples = [f"#{seen[i][0] + 1}: {_compact_json(seen[i][1])}" for i in pick_idx]
+        else:
+            samples = ["-"]
 
-                st.markdown(
-                    (
-                        f"<div style='padding-left:{indent * 18}px; font-family: Consolas, Menlo, monospace; "
-                        f"color:{_path_color(schema_path)};'>"
-                        f"\"{html.escape(key)}\""
-                        "</div>"
-                    ),
-                    unsafe_allow_html=True,
-                )
+        infos.append(FieldInfo(path=path, depth=_path_depth(path), samples=samples))
 
-            with row[1]:
-                if isinstance(value, (dict, list)):
-                    _editor_line(indent, f": {comma}")
-                    _render_interactive_json(
-                        value,
-                        base_schema=schema_path,
-                        base_concrete=concrete_path,
-                        indent=indent + 1,
-                    )
-                else:
-                    _editor_line(indent, f": {_format_scalar(value)}{comma}")
-
-        _editor_line(indent, "}")
-
-    elif isinstance(data, list):
-        _editor_line(indent, "[")
-        for idx, item in enumerate(data):
-            list_schema = f"{base_schema}[]" if base_schema else "[]"
-            list_concrete = f"{base_concrete}[{idx}]" if base_concrete else f"[{idx}]"
-
-            if isinstance(item, (dict, list)):
-                _render_interactive_json(
-                    item,
-                    base_schema=list_schema,
-                    base_concrete=list_concrete,
-                    indent=indent + 1,
-                )
-            else:
-                comma = "," if idx < len(data) - 1 else ""
-                _editor_line(indent + 1, f"{_format_scalar(item)}{comma}")
-        _editor_line(indent, "]")
-    else:
-        _editor_line(indent, _format_scalar(data))
+    return infos
 
 
-def _download_list(label: str, values: set[str]) -> None:
+def _display_path(path: str, depth: int) -> str:
+    return f"{'  ' * depth}{path}"
+
+
+def _export_blacklist() -> None:
+    payload = json.dumps(sorted(st.session_state.blacklist), ensure_ascii=False, indent=2)
     st.download_button(
-        label=f"{label} exportieren",
-        data=json.dumps(sorted(values), ensure_ascii=False, indent=2),
-        file_name=f"{label.lower()}.json",
+        "Blacklist exportieren",
+        data=payload,
+        file_name="blacklist.json",
         mime="application/json",
         use_container_width=True,
     )
@@ -186,8 +181,8 @@ def _download_list(label: str, values: set[str]) -> None:
 def main() -> None:
     _init_state()
 
-    st.title("🧭 JSON Lister – Editoransicht mit Variablen-Flags")
-    st.caption("Links Optionen, rechts gesamter JSON-Inhalt wie in einer IDE inklusive Flag-Farben.")
+    st.title("🧭 JSON Blacklist Builder")
+    st.caption("Einzigartige Felder mit Beispielwerten prüfen und Blacklist für spätere Bereinigung erstellen.")
 
     left, right = st.columns([1, 2.2])
 
@@ -195,66 +190,91 @@ def main() -> None:
         st.subheader("Optionen")
         _load_json()
 
-        st.session_state.interaction_mode = st.radio(
-            "Klickmodus",
-            ["Whitelist", "Blacklist", "Zuordnung aufheben"],
-            help=(
-                "Whitelist: Feld wird grün markiert. "
-                "Blacklist: Feld wird rot markiert. "
-                "Zuordnung aufheben: Markierung wird entfernt."
-            ),
+        st.session_state.sample_count = st.number_input(
+            "Anzahl Beispielwerte pro Feld (X)",
+            min_value=2,
+            max_value=10,
+            value=int(st.session_state.sample_count),
+            step=1,
+            help="Standard: 3. Die Beispiele werden möglichst gleichmäßig über vorhandene Einträge verteilt.",
         )
 
-        st.session_state.hide_blacklisted = st.checkbox(
-            "Blacklist-Einträge ausblenden",
-            value=st.session_state.hide_blacklisted,
-            help="Blendet blacklisted Felder aus, um das Endresultat zu simulieren.",
-        )
+        if st.button("Feldanalyse aktualisieren", use_container_width=True):
+            if st.session_state.records:
+                st.session_state.field_infos = _build_field_infos(
+                    st.session_state.records,
+                    int(st.session_state.sample_count),
+                )
 
-        if st.button("Whitelist/Blacklist zurücksetzen", use_container_width=True):
-            _clear_lists()
+        if st.button("Blacklist zurücksetzen", use_container_width=True):
+            st.session_state.blacklist = set()
 
-        if st.session_state.raw_json is not None:
-            all_paths = sorted(_extract_variable_paths(st.session_state.raw_json))
-            st.session_state.all_variable_paths = all_paths
+        if st.session_state.records:
+            if not st.session_state.field_infos:
+                st.session_state.field_infos = _build_field_infos(
+                    st.session_state.records,
+                    int(st.session_state.sample_count),
+                )
+
             st.info(
                 f"Datei: {st.session_state.filename}\n"
-                f"Einzigartige Felder gesamt: {len(all_paths)}\n"
-                f"Whitelist: {len(st.session_state.whitelist)} | Blacklist: {len(st.session_state.blacklist)}"
+                f"Einträge: {len(st.session_state.records)}\n"
+                f"Einzigartige Felder: {len(st.session_state.field_infos)}\n"
+                f"Blacklist-Einträge: {len(st.session_state.blacklist)}"
             )
 
-            st.markdown("#### Whitelist (grün)")
-            st.dataframe({"Variable": sorted(st.session_state.whitelist)}, use_container_width=True, height=160)
-            _download_list("Whitelist", st.session_state.whitelist)
-
-            st.markdown("#### Blacklist (rot)")
-            st.dataframe({"Variable": sorted(st.session_state.blacklist)}, use_container_width=True, height=160)
-            _download_list("Blacklist", st.session_state.blacklist)
-
-            search = st.text_input("Suche Variablenpfad", "")
-            matches = [p for p in all_paths if search.lower() in p.lower()]
-            st.dataframe({"Pfad": matches[:300]}, use_container_width=True, height=160)
+            st.markdown("#### Blacklist")
+            st.dataframe({"Field": sorted(st.session_state.blacklist)}, use_container_width=True, height=200)
+            _export_blacklist()
         else:
             st.info("Bitte zuerst eine JSON-Datei laden.")
 
     with right:
-        st.subheader("JSON-Editoransicht")
-        if st.session_state.raw_json is None:
+        st.subheader("Feldübersicht (Hierarchie + Beispielwerte)")
+
+        if not st.session_state.records:
             st.markdown(
                 "### Anleitung\n"
-                "1. JSON-Datei links laden.\n"
-                "2. Klickmodus wählen (Whitelist/Blacklist/Zuordnung aufheben).\n"
-                "3. Variablennamen im Editor anklicken.\n"
-                "4. In Arrays gilt ein Klick für alle Elemente mit diesem Feld (z. B. `Questions[].Text`)."
+                "1. JSON-Datei laden.\n"
+                "2. X Beispielwerte einstellen (Standard 3, min 2, max 10).\n"
+                "3. Felder in der Tabelle für die Blacklist markieren.\n"
+                "4. Blacklist exportieren."
             )
-        else:
-            st.markdown(
-                """
-                <div style='background:#1e1e1e; border-radius:8px; padding:12px; border:1px solid #2d2d2d;'></div>
-                """,
-                unsafe_allow_html=True,
-            )
-            _render_interactive_json(st.session_state.raw_json)
+            return
+
+        infos: list[FieldInfo] = st.session_state.field_infos
+
+        rows: list[dict[str, Any]] = []
+        max_samples = int(st.session_state.sample_count)
+        for info in infos:
+            row: dict[str, Any] = {
+                "Blacklist": info.path in st.session_state.blacklist,
+                "Field": _display_path(info.path, info.depth),
+                "Path": info.path,
+            }
+            for idx in range(max_samples):
+                row[f"Beispiel {idx + 1}"] = info.samples[idx] if idx < len(info.samples) else "-"
+            rows.append(row)
+
+        edited = st.data_editor(
+            rows,
+            use_container_width=True,
+            hide_index=True,
+            key="field_editor",
+            column_config={
+                "Blacklist": st.column_config.CheckboxColumn(
+                    "Blacklist",
+                    help="Aktiviere, um das Field in die Blacklist aufzunehmen.",
+                    default=False,
+                ),
+                "Field": st.column_config.TextColumn("Field (Hierarchie)", disabled=True),
+                "Path": st.column_config.TextColumn("Pfad", disabled=True),
+            },
+            disabled=["Field", "Path"] + [f"Beispiel {i + 1}" for i in range(max_samples)],
+        )
+
+        new_blacklist = {row["Path"] for row in edited if row.get("Blacklist")}
+        st.session_state.blacklist = new_blacklist
 
 
 if __name__ == "__main__":
