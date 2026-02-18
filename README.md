@@ -14,6 +14,15 @@ Ein lokales Tool mit IDE-ähnlicher Darstellung: links die Optionenleiste, recht
 - Option: Blacklist-Einträge in der Darstellung ausblenden.
 - Export von Whitelist und Blacklist als JSON.
 
+## Wichtige Logik bei Arrays
+
+Felder werden **einzigartig als Schema-Pfad** behandelt (z. B. `Questions[].Text`).
+Das bedeutet:
+
+- Wenn du `Questions[].Text` markierst, gilt das automatisch für **alle** Einträge in `Questions`, die `Text` besitzen.
+- Du musst nicht jedes Element einzeln auswählen.
+- Trotzdem bleibt jedes einzigartige Feld separat auswählbar (z. B. `Questions[].Id`, `Questions[].Type`, `Questions[].Text`).
+
 ## Start
 
 Voraussetzung: `streamlit` ist installiert.

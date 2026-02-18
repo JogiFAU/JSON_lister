@@ -41,6 +41,7 @@ def _load_json() -> None:
 
 
 def _extract_variable_paths(data: Any, base: str = "") -> set[str]:
+    """Return unique schema-like paths (arrays normalized as [])."""
     paths: set[str] = set()
     if isinstance(data, dict):
         for key, value in data.items():
@@ -48,8 +49,8 @@ def _extract_variable_paths(data: Any, base: str = "") -> set[str]:
             paths.add(current)
             paths.update(_extract_variable_paths(value, current))
     elif isinstance(data, list):
-        for idx, item in enumerate(data):
-            list_base = f"{base}[{idx}]" if base else f"[{idx}]"
+        list_base = f"{base}[]" if base else "[]"
+        for item in data:
             paths.update(_extract_variable_paths(item, list_base))
     return paths
 
@@ -83,7 +84,7 @@ def _should_hide(path: str) -> bool:
     if not st.session_state.hide_blacklisted:
         return False
     for blacklisted in st.session_state.blacklist:
-        if path == blacklisted or path.startswith(blacklisted + ".") or path.startswith(blacklisted + "["):
+        if path == blacklisted or path.startswith(blacklisted + ".") or path.startswith(blacklisted + "[]"):
             return True
     return False
 
@@ -99,26 +100,38 @@ def _editor_line(indent: int, text: str, color: str = "#d4d4d4") -> None:
     )
 
 
-def _render_interactive_json(data: Any, base: str = "", indent: int = 0) -> None:
+def _render_interactive_json(
+    data: Any,
+    base_schema: str = "",
+    base_concrete: str = "",
+    indent: int = 0,
+) -> None:
+    """
+    Render full JSON. Click assigns schema-like path (with []) so one field selection
+    applies to all matching array elements.
+    """
     if isinstance(data, dict):
         _editor_line(indent, "{")
-        keys = list(data.items())
-        for idx, (key, value) in enumerate(keys):
-            path = f"{base}.{key}" if base else key
-            if _should_hide(path):
+        visible_items = []
+        for key, value in data.items():
+            schema_path = f"{base_schema}.{key}" if base_schema else key
+            concrete_path = f"{base_concrete}.{key}" if base_concrete else key
+            if _should_hide(schema_path):
                 continue
+            visible_items.append((key, value, schema_path, concrete_path))
 
-            comma = "," if idx < len(keys) - 1 else ""
+        for idx, (key, value, schema_path, concrete_path) in enumerate(visible_items):
+            comma = "," if idx < len(visible_items) - 1 else ""
 
             row = st.columns([0.44, 0.56])
             with row[0]:
-                if st.button(path, key=f"var_{path}", use_container_width=True):
-                    _apply_mode(path)
+                if st.button(schema_path, key=f"var_{concrete_path}", use_container_width=True):
+                    _apply_mode(schema_path)
 
                 st.markdown(
                     (
                         f"<div style='padding-left:{indent * 18}px; font-family: Consolas, Menlo, monospace; "
-                        f"color:{_path_color(path)};'>"
+                        f"color:{_path_color(schema_path)};'>"
                         f"\"{html.escape(key)}\""
                         "</div>"
                     ),
@@ -128,7 +141,12 @@ def _render_interactive_json(data: Any, base: str = "", indent: int = 0) -> None
             with row[1]:
                 if isinstance(value, (dict, list)):
                     _editor_line(indent, f": {comma}")
-                    _render_interactive_json(value, path, indent + 1)
+                    _render_interactive_json(
+                        value,
+                        base_schema=schema_path,
+                        base_concrete=concrete_path,
+                        indent=indent + 1,
+                    )
                 else:
                     _editor_line(indent, f": {_format_scalar(value)}{comma}")
 
@@ -137,9 +155,16 @@ def _render_interactive_json(data: Any, base: str = "", indent: int = 0) -> None
     elif isinstance(data, list):
         _editor_line(indent, "[")
         for idx, item in enumerate(data):
-            path = f"{base}[{idx}]" if base else f"[{idx}]"
+            list_schema = f"{base_schema}[]" if base_schema else "[]"
+            list_concrete = f"{base_concrete}[{idx}]" if base_concrete else f"[{idx}]"
+
             if isinstance(item, (dict, list)):
-                _render_interactive_json(item, path, indent + 1)
+                _render_interactive_json(
+                    item,
+                    base_schema=list_schema,
+                    base_concrete=list_concrete,
+                    indent=indent + 1,
+                )
             else:
                 comma = "," if idx < len(data) - 1 else ""
                 _editor_line(indent + 1, f"{_format_scalar(item)}{comma}")
@@ -194,7 +219,7 @@ def main() -> None:
             st.session_state.all_variable_paths = all_paths
             st.info(
                 f"Datei: {st.session_state.filename}\n"
-                f"Variablen gesamt: {len(all_paths)}\n"
+                f"Einzigartige Felder gesamt: {len(all_paths)}\n"
                 f"Whitelist: {len(st.session_state.whitelist)} | Blacklist: {len(st.session_state.blacklist)}"
             )
 
@@ -214,22 +239,21 @@ def main() -> None:
 
     with right:
         st.subheader("JSON-Editoransicht")
-        st.markdown(
-            """
-            <div style='background:#1e1e1e; border-radius:8px; padding:12px; border:1px solid #2d2d2d;'>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-
         if st.session_state.raw_json is None:
             st.markdown(
                 "### Anleitung\n"
                 "1. JSON-Datei links laden.\n"
                 "2. Klickmodus wählen (Whitelist/Blacklist/Zuordnung aufheben).\n"
-                "3. Variablennamen im Editor anklicken."
+                "3. Variablennamen im Editor anklicken.\n"
+                "4. In Arrays gilt ein Klick für alle Elemente mit diesem Feld (z. B. `Questions[].Text`)."
             )
         else:
+            st.markdown(
+                """
+                <div style='background:#1e1e1e; border-radius:8px; padding:12px; border:1px solid #2d2d2d;'></div>
+                """,
+                unsafe_allow_html=True,
+            )
             _render_interactive_json(st.session_state.raw_json)
 
 
